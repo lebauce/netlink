@@ -15,6 +15,13 @@ import (
 	"github.com/vishvananda/netns"
 )
 
+/*
+#include <linux/netlink.h>  // AF_NETLINK, sockaddr_nl
+#include <sys/socket.h>  // socket()
+#include <unistd.h>  // close()
+*/
+import "C"
+
 const (
 	// Family type definitions
 	FAMILY_ALL = syscall.AF_UNSPEC
@@ -450,17 +457,19 @@ type NetlinkSocket struct {
 }
 
 func getNetlinkSocket(protocol int) (*NetlinkSocket, error) {
-	fd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW, protocol)
+	fd, err := C.socket(C.AF_NETLINK, C.SOCK_RAW, C.int(protocol))
 	if err != nil {
 		return nil, err
 	}
 	s := &NetlinkSocket{
-		fd: fd,
+		fd: int(fd),
 	}
-	s.lsa.Family = syscall.AF_NETLINK
-	if err := syscall.Bind(fd, &s.lsa); err != nil {
-		syscall.Close(fd)
-		return nil, err
+
+	var nl C.struct_sockaddr_nl
+	nl.nl_family = C.AF_NETLINK
+	if err := C.bind(fd, (*C.struct_sockaddr)(unsafe.Pointer(&nl)), C.socklen_t(unsafe.Sizeof(nl))); err != 0 {
+		C.close(fd)
+		return nil, syscall.Errno(err)
 	}
 
 	return s, nil
@@ -536,22 +545,24 @@ func executeInNetns(newNs, curNs netns.NsHandle) (func(), error) {
 // Returns the netlink socket on which Receive() method can be called
 // to retrieve the messages from the kernel.
 func Subscribe(protocol int, groups ...uint) (*NetlinkSocket, error) {
-	fd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW, protocol)
+	fd, err := C.socket(C.AF_NETLINK, C.SOCK_RAW, C.int(protocol))
 	if err != nil {
 		return nil, err
 	}
 	s := &NetlinkSocket{
-		fd: fd,
+		fd: int(fd),
 	}
-	s.lsa.Family = syscall.AF_NETLINK
+
+	var nl C.struct_sockaddr_nl
+	nl.nl_family = C.AF_NETLINK
 
 	for _, g := range groups {
-		s.lsa.Groups |= (1 << (g - 1))
+		nl.nl_groups |= (1 << (g - 1))
 	}
 
-	if err := syscall.Bind(fd, &s.lsa); err != nil {
-		syscall.Close(fd)
-		return nil, err
+	if err := C.bind(fd, (*C.struct_sockaddr)(unsafe.Pointer(&nl)), C.socklen_t(unsafe.Sizeof(nl))); err != 0 {
+		C.close(fd)
+		return nil, syscall.Errno(err)
 	}
 
 	return s, nil
@@ -570,7 +581,7 @@ func SubscribeAt(newNs, curNs netns.NsHandle, protocol int, groups ...uint) (*Ne
 }
 
 func (s *NetlinkSocket) Close() {
-	syscall.Close(s.fd)
+	C.close(C.int(s.fd))
 	s.fd = -1
 }
 
